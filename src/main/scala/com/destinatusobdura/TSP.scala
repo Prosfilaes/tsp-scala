@@ -1,4 +1,6 @@
 import scala.math._
+import scala.collection.parallel.CollectionConverters._
+
 package com.destinatusobdura {
 
 case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
@@ -22,7 +24,15 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
   def bnb (b : Int) : Seq[Int] = {
     var best = b
     val nodeSet = Range (0, nodes).toSet
-    val mins = dist.map (_.filter(_ != 0).min)
+    //for (i <- Range(0, nodes)) {
+    //  println (i.toString + ": " + dist(i).mkString(","))
+    //}
+    val mins_old = dist.map (_.filter(_ != 0).min)
+    println ("mins_old: " + mins_old.mkString (","))
+    // each point has two edges in the final solution, and share them, so take the
+    // smallest two edges and divide them by two
+    val mins = dist.map (_.filter(_ != 0).sorted.take(2).sum / 2)
+    println ("mins: " + mins.mkString(","))
     def bnbRec (start : Seq[Int]) : Option[(Seq[Int], Int)] = {
       val len = TSPProblem.measureTSP (start, dist)
       if (len >= best) return None
@@ -34,7 +44,7 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
         val remainingNodes = (nodeSet -- start).toSeq
         val minLen = len + remainingNodes.map (x => mins (x)).sum
         val newNodes = remainingNodes.map (n => (n, dist(start.last)(n))).sortBy(_(1))
-        val results = newNodes.map (n => bnbRec (start.appended(n(0)))).flatten
+        val results = newNodes.par.map (n => bnbRec (start.appended(n(0)))).flatten
         if (results.isEmpty) None
         else Some (results.minBy (_(1)))
       }      
@@ -58,12 +68,15 @@ object TSPProblem {
       val min = d - deg;
       PI * (deg + 5.0 * min/ 3.0) / 180.0;
     }
- 
-    val RRR = 6378.388;
-    val q1 = cos( toRad(a(1)) - toRad(b(1)));
-    val q2 = cos( toRad(a(0)) - toRad(b(0)));
-    val q3 = cos( toRad(a(0)) + toRad(b(0)));
-    ( RRR * acos( 0.5*((1.0+q1)*q2 - (1.0-q1)*q3) ) + 1.0).toInt
+    if (a == b) {
+      0
+    } else {
+      val RRR = 6378.388;
+      val q1 = cos( toRad(a(1)) - toRad(b(1)));
+      val q2 = cos( toRad(a(0)) - toRad(b(0)));
+      val q3 = cos( toRad(a(0)) + toRad(b(0)));
+      ( RRR * acos( 0.5*((1.0+q1)*q2 - (1.0-q1)*q3) ) + 1.0).toInt
+    }
   }
 
   def fromLocs (loc : Seq [(Int, Int)]) : TSPProblem = {
@@ -105,7 +118,6 @@ object TSPProblem {
       }
       else if (lines.startsWith (" ")) {
         val split = lines.strip.split ("  *")
-        print (split.mkString)
         locs += ((split(1).toDouble, split(2).toDouble))
       }
     }
@@ -158,12 +170,11 @@ object TSP {
 
   def main(args: Array[String]) =  {
     val prob = TSPProblem.fromGeoFile (args(0))
+    println (prob.dist.map (_.max).max)
     val nn = prob.nearestNeighbor
     val nndist = TSPProblem.measureTSP(nn, prob.dist)
 
-    System.out.println (prob.dist.toList.map (_.toList))
-    System.out.println (nn)
-    System.out.println (nndist)
+    System.out.println (nn.toString + " : " + nndist)
 
     val bnb = prob.bnb (nndist)
     System.out.println (bnb)
