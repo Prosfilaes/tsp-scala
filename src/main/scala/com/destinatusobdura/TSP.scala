@@ -1,10 +1,13 @@
 import scala.math._
 import scala.collection.parallel.CollectionConverters._
+//import java.util.concurrent.atomic.AtomicInteger
 
 package com.destinatusobdura {
 
 case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
-  def nearestNeighbor : Seq[Int] = {
+  val nearestNeighborSol = nearestNeighbor
+
+  private def nearestNeighbor : Seq[Int] = {
       var s = scala.collection.mutable.ListBuffer(0)
       while (s.length < nodes) {
         val curNode = s.last
@@ -21,18 +24,12 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
       return s.toSeq
   }
 
+  //val bestSol = new AtomicInteger (measureTSP (nearestNeighborSol, dist))
+
   def bnb (b : Int) : Seq[Int] = {
     var best = b
     val nodeSet = Range (0, nodes).toSet
-    //for (i <- Range(0, nodes)) {
-    //  println (i.toString + ": " + dist(i).mkString(","))
-    //}
-    val mins_old = dist.map (_.filter(_ != 0).min)
-    println ("mins_old: " + mins_old.mkString (","))
-    // each point has two edges in the final solution, and share them, so take the
-    // smallest two edges and divide them by two
     val mins = dist.map (_.filter(_ != 0).sorted.take(2).sum / 2)
-    println ("mins: " + mins.mkString(","))
     def bnbRec (start : Seq[Int]) : Option[(Seq[Int], Int)] = {
       val len = TSPProblem.measureTSP (start, dist)
       if (len >= best) return None
@@ -171,7 +168,7 @@ object TSP {
   def main(args: Array[String]) =  {
     val prob = TSPProblem.fromGeoFile (args(0))
     println (prob.dist.map (_.max).max)
-    val nn = prob.nearestNeighbor
+    val nn = prob.nearestNeighborSol
     val nndist = TSPProblem.measureTSP(nn, prob.dist)
 
     System.out.println (nn.toString + " : " + nndist)
