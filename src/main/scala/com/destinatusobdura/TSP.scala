@@ -1,6 +1,6 @@
 import scala.math._
 import scala.collection.parallel.CollectionConverters._
-//import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicInteger
 
 package com.destinatusobdura {
 
@@ -24,7 +24,7 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
       return s.toSeq
   }
 
-  //val bestSol = new AtomicInteger (measureTSP (nearestNeighborSol, dist))
+  val bestSol = new AtomicInteger (TSPProblem.measureTSP (nearestNeighborSol, dist))
 
   def bnb (b : Int) : Seq[Int] = {
     var best = b
@@ -32,21 +32,29 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
     val mins = dist.map (_.filter(_ != 0).sorted.take(2).sum / 2)
     def bnbRec (start : Seq[Int]) : Option[(Seq[Int], Int)] = {
       val len = TSPProblem.measureTSP (start, dist)
-      if (len >= best) return None
+      var currBest = bestSol.get()
+      if (len >= currBest) return None
       else if (start.length == nodes) {
+        while (!bestSol.compareAndSet(currBest, len)) {
+          currBest = bestSol.get()
+          if (len >= currBest) return None
+        }
         System.out.println (start.toString + " : " + len.toString)
-        best = len
         return Some(start, len)
       } else {
         val remainingNodes = (nodeSet -- start).toSeq
         val minLen = len + remainingNodes.map (x => mins (x)).sum
-        val newNodes = remainingNodes.map (n => (n, dist(start.last)(n))).sortBy(_(1))
-        val results = newNodes.par.map (n => bnbRec (start.appended(n(0)))).flatten
-        if (results.isEmpty) None
-        else Some (results.minBy (_(1)))
+        if (minLen >= currBest) None
+        else {
+          val newNodes = remainingNodes.map (n => (n, dist(start.last)(n))).sortBy(_(1))
+          val results = newNodes.par.map (n => bnbRec (start.appended(n(0)))).flatten
+          //val results = remainingNodes.par.map (n => bnbRec(start.appended (n))).flatten
+          if (results.isEmpty) None
+          else Some (results.minBy (_(1)))
+        }
       }      
     }
-    bnbRec (Seq(0)).get.apply(0)
+    bnbRec (Seq(0)).map(_.apply(0)).getOrElse (nearestNeighborSol)
   }
 }
 object TSPProblem {
