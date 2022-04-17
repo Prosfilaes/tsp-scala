@@ -29,7 +29,7 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
   def bnb (b : Int) : Seq[Int] = {
     var best = b
     val nodeSet = Range (0, nodes).toSet
-    val mins = dist.map (_.filter(_ != 0).sorted.take(2).sum / 2)
+    val mins = dist.map (_.filter(_ != 0).min)
     def bnbRec (start : Seq[Int]) : Option[(Seq[Int], Int)] = {
       val len = TSPProblem.measureTSP (start, dist)
       var currBest = bestSol.get()
