@@ -29,8 +29,10 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
   def bnb (b : Int) : Seq[Int] = {
     var best = b
     val nodeSet = Range (0, nodes).toSet
-    val mins = dist.map (_.filter(_ != 0).min)
+    val mins = dist.map (_.filter(_ != 0).sorted.take(2).sum / 2)
     def bnbRec (start : Seq[Int]) : Option[(Seq[Int], Int)] = {
+      // Since it includes the line for the last point to the start, it only works on
+      // spaces obeying the triangle inequality
       val len = TSPProblem.measureTSP (start, dist)
       var currBest = bestSol.get()
       if (len >= currBest) return None
@@ -43,12 +45,14 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
         return Some(start, len)
       } else {
         val remainingNodes = (nodeSet -- start).toSeq
-        val minLen = len + remainingNodes.map (x => mins (x)).sum
+        val minLen = Math.max (
+          len,
+          TSPProblem.measureTSP (start, dist, true /* partial */) + remainingNodes.map (x => mins (x)).sum
+        )
         if (minLen >= currBest) None
         else {
           val newNodes = remainingNodes.map (n => (n, dist(start.last)(n))).sortBy(_(1))
           val results = newNodes.par.map (n => bnbRec (start.appended(n(0)))).flatten
-          //val results = remainingNodes.par.map (n => bnbRec(start.appended (n))).flatten
           if (results.isEmpty) None
           else Some (results.minBy (_(1)))
         }
@@ -135,55 +139,18 @@ object TSPProblem {
 object TSP {
   val diamond = TSPProblem.fromLocs (Seq((0, 0), (50000, 1000), (50000, -1000), (100000, 0)))
 
-  val burma14 = TSPProblem.fromGeo (Seq(
-    (16.47,       96.10),
-    (16.47,       94.44),
-    (20.09,       92.54),
-    (22.39,       93.37),
-    (25.23,       97.24),
-    (22.00,       96.05),
-    (20.47,       97.02),
-    (17.20,       96.29),
-    (16.30,       97.38),
-    (14.05,      98.12),
-    (16.53,       97.38),
-    (21.52,       95.59),
-    (19.41,       97.13),
-    (20.09,       94.55)
-  ))
-
-  val ulysses16 = TSPProblem.fromGeo (Seq(
- (38.24, 20.42),
- (39.57, 26.15),
- (40.56, 25.32),
- (36.26, 23.12),
- (33.48, 10.54),
- (37.56, 12.19),
- (38.42, 13.11),
- (37.52, 20.44),
-(41.23 , 9.10),
- (41.17 ,13.05),
- (36.08, -5.21),
- (38.47, 15.13),
- (38.15, 15.35),
- (37.51, 15.17),
- (35.49, 14.32),
- (39.36, 19.56)
-  ))
-
-
-
   def main(args: Array[String]) =  {
     val prob = TSPProblem.fromGeoFile (args(0))
-    println (prob.dist.map (_.max).max)
+    println ("Longest distance: " + prob.dist.map (_.max).max.toString)
     val nn = prob.nearestNeighborSol
     val nndist = TSPProblem.measureTSP(nn, prob.dist)
 
+    System.out.println ("Nearest neighbor: ")
     System.out.println (nn.toString + " : " + nndist)
 
     val bnb = prob.bnb (nndist)
-    System.out.println (bnb)
-    System.out.println (TSPProblem.measureTSP(bnb, prob.dist))
+    System.out.println ("Final solution: " + bnb.toString)
+    System.out.println ("Final distance: " + TSPProblem.measureTSP(bnb, prob.dist).toString)
   }
 }
 }
