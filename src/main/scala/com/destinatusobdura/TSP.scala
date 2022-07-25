@@ -3,6 +3,13 @@ import scala.collection.parallel.CollectionConverters._
 import scala.annotation.tailrec
 import java.util.concurrent.atomic.AtomicInteger
 
+import org.ojalgo.OjAlgoUtils
+import org.ojalgo.netio.BasicLogger
+import org.ojalgo.optimisation.Expression
+import org.ojalgo.optimisation.ExpressionsBasedModel
+import org.ojalgo.optimisation.Optimisation
+import org.ojalgo.optimisation.Variable
+
 package com.destinatusobdura {
 
 case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
@@ -36,7 +43,6 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
   }
 
   private def twoOptLength (route : Seq[Int], origLen : Int, i : Int, j : Int) : Int = {
-    //println (i.toString + "/" + j.toString)
     assert (j - i > 2)
     // Old length - dist (i - 1, i) - dist (j - 1, j) + dist (i - 1, j - 1) + dist (i, j)
     val newLen = origLen - dist (route (i - 1))(route(i)) - dist (route (j - 1))(route (j)) 
@@ -55,6 +61,39 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
       else twoOpt (route, origLen, i, j + 1)
     }
   }
+
+  def lPApproximation (run : Seq[Int]) : Int = {
+    def canon (i : Int, j : Int) : (Int, Int) ={
+      if (i > j) (j, i)
+      else (i, j)
+    }
+    val model = new ExpressionsBasedModel()
+    val variables = Range(0, nodes).
+      flatMap (x => Range (0, nodes).map (y => (x, y))).
+      filter (x => x(0) != x(1) && x == canon(x(0), x(1))).
+      map (
+        (x, y) => ((x, y), model.addVariable (f"v$x$y").lower(0).upper(1).weight (dist (x)(y)))
+      ).
+      toMap
+    for (i <- Range(0, nodes)) {
+      val inout = model.addExpression (f"node$i").lower(2).upper(2)
+      for (j <- Range(0, nodes)) {
+        if i != j then {
+          inout.set (variables (canon(i, j)), 1)
+        }
+      }
+    }
+    val runl = run.length
+    if (runl >= 2) {
+      for (i <- Range (0, runl - 1)) {
+        val preset = model.addExpression (f"preset$i").lower(1).upper(1).set (variables (canon (run(i), run (i + 1))), 1)
+      }
+    }
+
+    val result = model.minimise()
+    result.getValue.asInstanceOf[Int]
+  }
+
 
   def bnb (b : Int) : Seq[Int] = {
     if (b < bestSol.get()) {
@@ -82,10 +121,11 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
         return Some(start, len)
       } else {
         val remainingNodes = (nodeSet -- start).toSeq
-        val minLen = Math.max (
-          len,
-          TSPProblem.measureTSP (start, dist, true /* partial */) + remainingNodes.map (x => mins (x)).sum
-        )
+        //val minLen = Math.max (
+        //  len,
+        //  TSPProblem.measureTSP (start, dist, true /* partial */) + remainingNodes.map (x => mins (x)).sum
+        //)
+        val minLen = lPApproximation (start)
         if (minLen >= currBest) None
         else {
           val newNodes = remainingNodes.map (n => (n, dist(start.last)(n))).sortBy(_(1))
@@ -178,9 +218,10 @@ object TSP {
 
   def main(args: Array[String]) =  {
     val prob = TSPProblem.fromGeoFile (args(0))
-    //println (prob)
-    //println (prob.dist.toSeq.map (_.toSeq))
+
     println ("Longest distance: " + prob.dist.map (_.max).max.toString)
+
+    println ("LP lower bound:" + prob.lPApproximation (Seq()).toString)
 
     val bestTwo = prob.twoOpt (Range(0, prob.nodes).toSeq)
     val bestTwodist = TSPProblem.measureTSP(bestTwo, prob.dist)
