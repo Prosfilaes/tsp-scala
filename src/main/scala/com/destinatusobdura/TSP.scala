@@ -2,6 +2,7 @@ import scala.math._
 import scala.collection.parallel.CollectionConverters._
 import scala.annotation.tailrec
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.PriorityBlockingQueue
 
 import org.ojalgo.OjAlgoUtils
 import org.ojalgo.netio.BasicLogger
@@ -11,6 +12,88 @@ import org.ojalgo.optimisation.Optimisation
 import org.ojalgo.optimisation.Variable
 
 package com.destinatusobdura {
+
+final case class TSPPartialSol (sol : Seq[Int], estTotal : Int) extends Comparable[TSPPartialSol] {
+  def compareTo (t: TSPPartialSol) = estTotal.compareTo (t.estTotal)
+} 
+
+
+final class BnBRunner (val t : TSPProblem, currBest : Int, currBestSol : Seq[Int]) {
+  val nodeSet = Range (0, t.nodes).toSet
+  val cores = Runtime.getRuntime().availableProcessors()
+  val best  = new AtomicInteger (currBest)
+  private var bestSol : Seq[Int] = currBestSol
+  val bnbQueue = PriorityBlockingQueue[TSPPartialSol] (1000)
+
+  def updateBest (sol: Seq[Int], newBest : Int) : Int = {
+    var cb = best.get()
+    synchronized {
+    var beenSet = false
+    while (cb > newBest && ! beenSet) {
+      beenSet = best.compareAndSet (cb, newBest)
+      cb = best.get()
+    }
+    if beenSet then {
+      bestSol = sol
+    }
+    }
+    System.out.println (newBest.toString + " : " + sol.toString)
+    cb
+  }
+  def start = {
+    bestSol = currBestSol
+    bnbQueue.offer (TSPPartialSol (Seq(0), 0)) // no need for real estimated value
+    val threads : Array[Thread] = Array.range (1, cores).map(n => new Thread (new BnBThread(this, n.toString)))
+    threads.map (_.start())
+    while (threads.exists(_.isAlive)) Thread.sleep (1000)
+    (best.get, bestSol)
+  }
+
+}
+
+class BnBThread (runner : BnBRunner, id : String) extends Runnable {
+  def run : Unit = {
+    System.out.println ("Starting... " + id)
+    while (true) {
+      val problem = runner.bnbQueue.poll()
+      if problem == null then {
+        System.out.println ("Got null problem " + id)
+        Thread.sleep (1000)
+        if runner.bnbQueue.peek() == null then {
+          System.out.println ("Dying " + id)
+          return
+        }
+      }
+      else {
+        System.out.println ("Got real problem " + id)
+        val currBest = runner.best.get()
+        if (currBest > problem.estTotal) {
+          assert (problem.sol.length < runner.t.nodes)
+          val remainingNodes = runner.nodeSet -- problem.sol
+          if remainingNodes.size == 1 then {
+            val sol = problem.sol :+ remainingNodes.head
+            val len = TSPProblem.measureTSP (sol, runner.t.dist)
+            if len < currBest then {
+              runner.updateBest (sol, len) 
+              // updateBest is synchronized and makes sure we aren't overwriting any other answer
+            }
+          }
+          else {
+            for (i <- remainingNodes) {
+              val sol = problem.sol :+ i
+              val estLen = runner.t.lPApproximation (sol)
+              val currBest = runner.best.get()             
+              if estLen < currBest then {
+                runner.bnbQueue.offer(TSPPartialSol (sol, estLen))
+              }
+            }
+          }
+        }
+      }
+    }
+
+  }
+}
 
 case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
   val nearestNeighborSol = nearestNeighbor
@@ -31,8 +114,6 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
       }
       return s.toSeq
   }
-
-  val bestSol = new AtomicInteger (TSPProblem.measureTSP (nearestNeighborSol, dist))
 
   private def twoOptSwap (route : Seq[Int], i : Int, j : Int) : Seq[Int] = {
     val (head, tail) = route.splitAt (i)
@@ -94,50 +175,8 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
     result.getValue.asInstanceOf[Int]
   }
 
-
-  def bnb (b : Int) : Seq[Int] = {
-    if (b < bestSol.get()) {
-        var continue = true
-        var currBest = bestSol.get()
-        while (continue && !bestSol.compareAndSet(currBest, b)) {
-          currBest = bestSol.get()
-          if (b >= currBest) continue = false
-        }
-    }
-    val nodeSet = Range (0, nodes).toSet
-    val mins = dist.map (_.filter(_ != 0).sorted.take(2).sum / 2)
-    def bnbRec (start : Seq[Int]) : Option[(Seq[Int], Int)] = {
-      // Since it includes the line for the last point to the start, it only works on
-      // spaces obeying the triangle inequality
-      val len = TSPProblem.measureTSP (start, dist)
-      var currBest = bestSol.get()
-      if (len >= currBest) return None
-      else if (start.length == nodes) {
-        while (!bestSol.compareAndSet(currBest, len)) {
-          currBest = bestSol.get()
-          if (len >= currBest) return None
-        }
-        System.out.println (start.toString + " : " + len.toString)
-        return Some(start, len)
-      } else {
-        val remainingNodes = (nodeSet -- start).toSeq
-        //val minLen = Math.max (
-        //  len,
-        //  TSPProblem.measureTSP (start, dist, true /* partial */) + remainingNodes.map (x => mins (x)).sum
-        //)
-        val minLen = lPApproximation (start)
-        if (minLen >= currBest) None
-        else {
-          val newNodes = remainingNodes.map (n => (n, dist(start.last)(n))).sortBy(_(1))
-          val results = newNodes.par.map (n => bnbRec (start.appended(n(0)))).flatten
-          if (results.isEmpty) None
-          else Some (results.minBy (_(1)))
-        }
-      }      
-    }
-    bnbRec (Seq(0)).map(_.apply(0)).getOrElse (nearestNeighborSol)
-  }
 }
+
 object TSPProblem {
   private def eucDist (a : (Int, Int), b : (Int, Int)) : Int = {
     val xdist = (a(0) - b(0)).toDouble
@@ -244,9 +283,13 @@ object TSP {
     var minimum = Math.min (Math.min(nndist, twodist), bestTwodist)
     System.out.println ("Minimum: " + minimum.toString)
     System.out.println ("--")
-    val bnb = prob.bnb (minimum)
-    System.out.println ("Final solution: " + bnb.toString)
-    System.out.println ("Final distance: " + TSPProblem.measureTSP(bnb, prob.dist).toString)
+
+    val bnbRunner = BnBRunner (prob, Math.min (twodist, bestTwodist), 
+      if bestTwodist < twodist then bestTwo else two)
+    val bnb = bnbRunner.start
+
+    System.out.println ("Final solution: " + bnb(1).toString)
+    System.out.println ("Final distance: " + bnb(0).toString)
   }
 }
 }
