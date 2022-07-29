@@ -4,12 +4,7 @@ import scala.annotation.tailrec
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.PriorityBlockingQueue
 
-import org.ojalgo.OjAlgoUtils
-import org.ojalgo.netio.BasicLogger
-import org.ojalgo.optimisation.Expression
 import org.ojalgo.optimisation.ExpressionsBasedModel
-import org.ojalgo.optimisation.Optimisation
-import org.ojalgo.optimisation.Variable
 
 package com.destinatusobdura {
 
@@ -53,19 +48,15 @@ final class BnBRunner (val t : TSPProblem, currBest : Int, currBestSol : Seq[Int
 
 class BnBThread (runner : BnBRunner, id : String) extends Runnable {
   def run : Unit = {
-    System.out.println ("Starting... " + id)
     while (true) {
       val problem = runner.bnbQueue.poll()
       if problem == null then {
-        System.out.println ("Got null problem " + id)
-        Thread.sleep (1000)
+        Thread.sleep (10000)
         if runner.bnbQueue.peek() == null then {
-          System.out.println ("Dying " + id)
           return
         }
       }
       else {
-        System.out.println ("Got real problem " + id)
         val currBest = runner.best.get()
         if (currBest > problem.estTotal) {
           assert (problem.sol.length < runner.t.nodes)
@@ -115,7 +106,7 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
       return s.toSeq
   }
 
-  private def twoOptSwap (route : Seq[Int], i : Int, j : Int) : Seq[Int] = {
+  private def twoOptSwap (route : Vector[Int], i : Int, j : Int) : Vector[Int] = {
     val (head, tail) = route.splitAt (i)
     val (middle, end) = tail.splitAt (j - i)
     val ret = head ++: middle.reverse ++: end
@@ -132,14 +123,16 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
     newLen
   }
 
-  @tailrec final def twoOpt (route : Seq[Int], oL : Int = -1, i : Int = 1, j : Int = 4) : Seq[Int] = {
+  def twoOpt (route : Seq[Int]) = twoOptRec (route.toVector)
+
+  @tailrec final def twoOptRec (route : Vector[Int], oL : Int = -1, i : Int = 1, j : Int = 4) : Seq[Int] = {
     val origLen = if (oL > 0) oL else TSPProblem.measureTSP (route, dist)
-    if (j >= route.length) twoOpt (route, origLen, i + 1, i + 4)
+    if (j >= route.length) twoOptRec (route, origLen, i + 1, i + 4)
     else if (i >= route.length) route
     else {
       val twoLen = twoOptLength (route, origLen, i, j)
-      if (twoLen < origLen) twoOpt (twoOptSwap (route, i, j), twoLen)
-      else twoOpt (route, origLen, i, j + 1)
+      if (twoLen < origLen) twoOptRec (twoOptSwap (route, i, j), twoLen)
+      else twoOptRec (route, origLen, i, j + 1)
     }
   }
 
@@ -153,7 +146,7 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
       flatMap (x => Range (0, nodes).map (y => (x, y))).
       filter (x => x(0) != x(1) && x == canon(x(0), x(1))).
       map (
-        (x, y) => ((x, y), model.addVariable (f"v$x$y").lower(0).upper(1).weight (dist (x)(y)))
+        (x, y) => ((x, y), model.addVariable (f"v$x$y").binary().weight (dist (x)(y)))
       ).
       toMap
     for (i <- Range(0, nodes)) {
@@ -170,7 +163,6 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
         val preset = model.addExpression (f"preset$i").lower(1).upper(1).set (variables (canon (run(i), run (i + 1))), 1)
       }
     }
-
     val result = model.minimise()
     result.getValue.asInstanceOf[Int]
   }
