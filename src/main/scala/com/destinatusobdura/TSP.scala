@@ -1,3 +1,20 @@
+  // TSP Scala
+  // Copyright (C) 2022  David Starner
+  //
+  // This program is free software: you can redistribute it and/or modify
+  // it under the terms of the GNU General Public License as published by
+  // the Free Software Foundation, either version 3 of the License, or
+  // (at your option) any later version.
+  //
+  // This program is distributed in the hope that it will be useful,
+  //  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  //  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  //  GNU General Public License for more details.
+  //
+  // You should have received a copy of the GNU General Public License
+  // along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+
 import scala.math._
 import scala.collection.parallel.CollectionConverters._
 import scala.annotation.tailrec
@@ -10,6 +27,7 @@ package com.destinatusobdura {
 
 final case class TSPPartialSol (sol : Seq[Int], estTotal : Int) extends Comparable[TSPPartialSol] {
   def compareTo (t: TSPPartialSol) = estTotal.compareTo (t.estTotal)
+  // def compareTo (t: TSPPartialSol) = (estTotal - sol.length / 3).compareTo ((t.estTotal - t.sol.length / 3))
 } 
 
 
@@ -39,8 +57,12 @@ final class BnBRunner (val t : TSPProblem, currBest : Int, currBestSol : Seq[Int
     bestSol = currBestSol
     bnbQueue.offer (TSPPartialSol (Seq(0), 0)) // no need for real estimated value
     val threads : Array[Thread] = Array.range (1, cores).map(n => new Thread (new BnBThread(this, n.toString)))
-    threads.map (_.start())
-    while (threads.exists(_.isAlive)) Thread.sleep (1000)
+    threads(0).start()
+    while (bnbQueue.size < cores) {
+      Thread.sleep (100)
+    }
+    threads.tail.map (_.start())
+    threads.map (_.join())
     (best.get, bestSol)
   }
 
@@ -51,13 +73,15 @@ class BnBThread (runner : BnBRunner, id : String) extends Runnable {
     while (true) {
       val problem = runner.bnbQueue.poll()
       if problem == null then {
-        Thread.sleep (10000)
+        Thread.sleep (1000)
         if runner.bnbQueue.peek() == null then {
+          //System.out.println (id + " dying")
           return
         }
       }
       else {
         val currBest = runner.best.get()
+        // System.out.println (problem.estTotal.toString + " : " + problem.sol.toString + " : " + id)
         if (currBest > problem.estTotal) {
           assert (problem.sol.length < runner.t.nodes)
           val remainingNodes = runner.nodeSet -- problem.sol
@@ -73,6 +97,12 @@ class BnBThread (runner : BnBRunner, id : String) extends Runnable {
             for (i <- remainingNodes) {
               val sol = problem.sol :+ i
               val estLen = runner.t.lPApproximation (sol)
+              if estLen < problem.estTotal then {
+                // Ojalgo is broken in that it makes more constrained problems cheaper than their less constrained predecessors
+                // when solving IP problems. Check for this mistake.
+                System.out.println ("ERR: " + problem.sol + " = " + problem.estTotal + " and " + sol + " = " + estLen)
+              }
+
               val currBest = runner.best.get()             
               if estLen < currBest then {
                 runner.bnbQueue.offer(TSPPartialSol (sol, estLen))
@@ -147,6 +177,7 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
       filter (x => x(0) != x(1) && x == canon(x(0), x(1))).
       map (
         (x, y) => ((x, y), model.addVariable (f"v$x$y").binary().weight (dist (x)(y)))
+        //(x, y) => ((x, y), model.addVariable (f"v$x$y").lower(0).upper(1).weight (dist (x)(y)))
       ).
       toMap
     for (i <- Range(0, nodes)) {
@@ -170,12 +201,12 @@ case class TSPProblem (nodes : Int, dist : Array[Array[Int]]) {
 }
 
 object TSPProblem {
-  private def eucDist (a : (Int, Int), b : (Int, Int)) : Int = {
+  private def eucDist (a : (Double, Double), b : (Double, Double)) : Int = {
     val xdist = (a(0) - b(0)).toDouble
     val ydist = (a(1) - b(1)).toDouble
 
     val sqdist = xdist * xdist + ydist * ydist
-    (scala.math.sqrt (sqdist)).toInt
+    (sqrt (sqdist)).toInt
   }
 
   private def geoDist (a : (Double, Double), b : (Double, Double)) : Int = {
@@ -196,7 +227,7 @@ object TSPProblem {
     }
   }
 
-  def fromLocs (loc : Seq [(Int, Int)]) : TSPProblem = {
+  def fromEuc2D (loc : Seq [(Double, Double)]) : TSPProblem = {
     val nodes = loc.length
     val dist : Array[Array[Int]] = Range (0, nodes).map (i => Range (0, nodes).map (
         j => eucDist (loc(i), loc(j))
@@ -217,15 +248,19 @@ object TSPProblem {
     else run.sliding (2).map (s => dist (s(0))(s(1))).sum + (if (partial) 0 else dist (run.head) (run.last)) 
   }
 
-  def fromGeoFile (fileName : String) : TSPProblem = {
+  def fromFile (fileName : String) : TSPProblem = {
     val bufferedSource = scala.io.Source.fromFile(fileName)
     var isGeo = false
-    val locs = scala.collection.mutable.ArrayBuffer[(Double, Double)] ()
+    var isEuc2D = false
+    val locs = scala.collection.mutable.ArrayBuffer[(String, String)] ()
     var break = false
     for (lines <- bufferedSource.getLines()) {
       if (break) {}
       else if (lines == "EDGE_WEIGHT_TYPE: GEO") {
         isGeo = true
+      }
+      else if (lines == "EDGE_WEIGHT_TYPE: EUC_2D" || lines == "EDGE_WEIGHT_TYPE : EUC_2D") {
+        isEuc2D = true
       }
       else if (lines.startsWith ("COMMENT: ") || lines.startsWith ("NAME:")) {
         System.out.println (lines)
@@ -233,22 +268,27 @@ object TSPProblem {
       else if (lines.contains ("EOF")) {
         break = true
       }
-      else if (lines.startsWith (" ") || lines.startsWith ("0")) {
+      else if (lines.startsWith (" ") || lines(0).isDigit) {
         val split = lines.strip.split ("  *")
-        locs += ((split(1).toDouble, split(2).toDouble))
+        locs += ((split(1), split(2)))
       }
     }
     bufferedSource.close()
-    assert (isGeo)
-    fromGeo (locs.toSeq)
+    val processedLocs = locs.toSeq.map ((x,y) => (x.toDouble, y.toDouble))
+    if isGeo then
+      fromGeo (processedLocs)
+    else if isEuc2D then
+      fromEuc2D (processedLocs)
+    else
+      throw IllegalArgumentException();
   }
 }
 
 object TSP {
-  val diamond = TSPProblem.fromLocs (Seq((0, 0), (50000, 1000), (50000, -1000), (100000, 0)))
+  val diamond = TSPProblem.fromEuc2D (Seq((0, 0), (50000, 1000), (50000, -1000), (100000, 0)))
 
   def main(args: Array[String]) =  {
-    val prob = TSPProblem.fromGeoFile (args(0))
+    val prob = TSPProblem.fromFile (args(0))
 
     println ("Longest distance: " + prob.dist.map (_.max).max.toString)
 
